@@ -1,7 +1,16 @@
 #!/bin/bash
+#
+# This script is used to remove all the packages but default install packages
+# installed on a RHEL 7 environment
+# 
+# This script remove all the symbolic links created by xcatha.py as well
+#
+# Use this script to clean up the test environment
+#
 
 set -x
 
+# The package list below is a list for RHEL 7 default install
 rhel_default_package_list=(
 	acl aic94xx-firmware alsa-firmware alsa-lib alsa-tools-firmware atk \
 	audit audit-libs authconfig autogen-libopts avahi-libs basesystem \

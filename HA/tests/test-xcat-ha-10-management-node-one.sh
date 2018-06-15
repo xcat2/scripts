@@ -1,4 +1,12 @@
 #!/bin/bash
+#
+# Run this script on the first xCAT management node to be.
+#
+# This script will run xcatha.py to setup the first xCAT management node
+# and then, run a compute node deployment
+#
+# Check test-xcat-ha.conf for configurations
+#
 
 set -x
 
