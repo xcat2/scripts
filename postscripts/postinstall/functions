@@ -1,0 +1,361 @@
+#
+# common bash functions for postscripts...
+#
+
+# global variables for the rest of these functions...
+installroot=$1
+osver=$2
+arch=$3
+profile=$4
+workdir=$5
+
+
+chrooted=${XCAT_IN_CHROOT:-no};
+# chrooted takes over for XCAT_IN_CHROOT from this point on.
+unset ARCH
+unset XCAT_IN_CHROOT;
+
+
+function set_master {
+  if [ ! -z $installroot ]; then
+    # make sure we have the master...
+    # where do we put this thingee...  probably in the 
+    # netboot postscript
+    if [ -z "$MASTER" ]; then
+      rc=0;
+      m=`lsdef -t site clustersite -i master -c` || rc=1;
+      if [ $rc != 0 ]; then
+        echo "lsdef failed to find master";
+        exit 1;
+      fi
+      echo $m;
+      MASTER=${m#*=}
+      echo MASTER=$MASTER
+    fi
+  fi
+  
+  if [ -z "$MASTER" ]; then
+     echo "$MASTER not defined"		 # stop right here if this is not defined...
+     exit 1;
+  fi;
+  export MASTER
+
+}
+
+
+# exit trap to undo any mounts done earlier
+function mnt_exit_trap {
+    local SOPTS=$-; set +x;
+    set +e
+    [ -z "$installroot" ] && return
+    # pull the mounts out submounts to the install directory from the /proc/mounts file.
+    while read -r ignore1 dir ignore2
+    do
+        [ "${dir:0:${#installroot}}" = "${installroot}" ] && umount -rl "$dir"
+    done </proc/mounts
+} 
+if [ ! -z $installroot ]; then
+    trap mnt_exit_trap EXIT
+fi
+
+
+# log to stdout and syslog
+logInfo() {
+    echo "`date`  (INFO) $@"
+    logger -t xcatpostinstall -p local4.info "(INFO) $@"
+}   
+# log to stdout and syslog
+logError() {
+    echo "`date` (ERROR) $@"
+    logger -t xcatpostinstall "(ERROR) $@"
+}
+
+print_settings() {
+    logInfo MASTER=$MASTER
+    # if any var is defined print all
+    if [[ "$installroot" != "" ]] || \
+	   [[ "$osver"  != "" ]] || \
+	   [[ "$arch"  != "" ]] || \
+	   [[ "$profile"  != "" ]] || \
+	   [[ "$workdir"  != "" ]]
+    then	
+	logInfo "installroot=$installroot"
+	logInfo "osver=$osver"	 
+	logInfo "arch=$arch"	 
+	logInfo "profile=$profile"	
+	logInfo "workdir=$workdir"
+    fi
+    if [[ "$ch_shell" != "" ]] || [[ "$rpm_root" != "" ]]
+	then
+	logInfo "ch_shell=$ch_shell"
+	logInfo "rpm_root=$rpm_root"
+    fi
+}
+
+# make sure proc and sys are available to anything running under chroot
+mount_sys() {
+    if [ -z $installroot ]; then	
+      return;
+    fi
+
+
+    local func="${FUNCNAME[0]}()"    
+    if ! grep -q $installroot/sys /proc/mounts 
+    then
+	logInfo "Mounting: mount -o bind /sys $installroot/sys"
+	mount -o bind /sys $installroot/sys 
+    fi
+}
+mount_proc() {
+    if [ -z $installroot ]; then	
+      return;
+    fi
+    local func="${FUNCNAME[0]}()"    
+    if ! grep -q $installroot/proc /proc/mounts
+    then
+	logInfo "Mounting: mount -o bind /proc $installroot/proc"
+	mount -o bind /proc $installroot/proc
+    fi
+}
+mount_dev() {
+    if [ -z $installroot ]; then	
+      return;
+    fi
+
+    local func="${FUNCNAME[0]}()"    
+    if ! grep -q $installroot/dev /proc/mounts
+    then
+        logInfo "Mounting: mount -o bind /dev $installroot/dev"
+        mount -o bind /dev $installroot/dev
+    fi
+}
+
+mount_install() {
+    if [ -z $installroot ]; then	
+        return;
+    fi
+
+    local func="${FUNCNAME[0]}()"    
+    if ! grep -q $installroot/install /proc/mounts
+    then
+        logInfo "Mounting: mount -o bind /install $installroot/install"
+        mkdir -p $installroot/install
+        mount --read-only -o bind /install $installroot/install
+    fi
+}
+
+run_chroot_if_required() {
+    ts=$1;
+    if [ -z $ts ]; then
+         logError "run_chroot_if_required requires a the script name to run";
+         exit 1;
+    fi
+    if [ ! -z $installroot ]; then 
+        logInfo "Executing chroot $installroot /bin/bash $thisdir/$thisscript"
+        mount_install;
+        local SOPTS=$-;
+        local rc=0
+        chroot $installroot /bin/bash -$SOPTS <<EOF || rc=$?
+export XCAT_IN_CHROOT=yes;
+$thisdir/$thisscript
+EOF
+	
+        logInfo exiting $thisscript from chroot with rc = $rc
+        exit $rc
+    fi
+}
+
+
+
+#
+# read the rpm pkgname from the package
+#
+function read_rpm_pkgname() {
+    rpmfile=$1;
+
+    {
+      rpm_info=`rpm -qip $rpmfile`;
+      pkgname=`echo $rpm_info | perl -nle '/Name : (\S+)/ && print "$1"'`
+      rpmversion=`echo $rpm_info | perl -nle '/Version : (\S+)/ && print "$1"'`
+      rpmrelease=`echo $rpm_info | perl -nle '/Release : (\S+)/ && print "$1"'`
+    } 2>/dev/null;
+    echo $pkgname;
+}
+
+
+
+function ispkg_installed()  {
+    rpmfile=$1;
+    echo $rpmfile;
+    if [[ -z $rpmfile ]]; then
+       echo "ispkg_installed parameter missing"; exit 1;
+    fi
+    {
+      rpm_info=`rpm -qip $rpmfile`;
+      pkgname=`echo $rpm_info | perl -nle '/Name : (\S+)/ && print "$1"'`
+      rpmversion=`echo $rpm_info | perl -nle '/Version : (\S+)/ && print "$1"'`
+      rpmrelease=`echo $rpm_info | perl -nle '/Release : (\S+)/ && print "$1"'`
+    } 2>/dev/null
+
+    if [[ -z $pkgname ]]; then
+        echo "$rpmfile Package Name Not found"; exit 1;
+    fi
+    rc=0;
+    {
+      ins_info=`rpm -qi $pkgname 2>/dev/null` || rc=$?;
+      insversion=`echo $ins_info | perl -nle '/Version : (\S+)/ && print "$1"'`
+      insrelease=`echo $ins_info | perl -nle '/Release : (\S+)/ && print "$1"'`
+      #installok=`echo $ins_info | perl -nle '/Status: install ok/ && print "1"'`;
+    } 2>/dev/null
+
+
+    if  [[ "$insversion" = "$rpmversion" ]] && [[ "$insrelease" = "$rpmrelease" ]]; then
+       echo "$rpmfile already installed";
+       rc=0;
+    else
+       echo "$rpmfile not installed";
+       rc=1;
+    fi
+    return $rc;
+}
+
+# parse the manifest and return
+# list of file names to get that we don't currently have...
+# param $1 -- manifest file name.
+# returns global wget_list -- list of packages to get
+# returns global pack_list -- complete list of packages..
+
+function parse_manifest {
+    pack_list=()
+    wget_list=();
+    local mf=$1;
+
+  while read line; do 
+    mfstmd5=$(echo $line | cut -f1 -d' ')
+    package=$(echo $line | cut -f2 -d' ')
+    echo mfstmd5=$mfstmd5, package=$package
+    pack_list+=($package)
+    pkgmd5=none
+    if [ -e $package ]; then
+       pkgmd5=$(md5sum $package | cut -f1 -d' ');
+    fi
+    if [ "$pkgmd5" != "$mfstmd5" ]; then
+	wget_list+=($package);
+    fi 
+  done < $mf
+
+}
+
+function retrieve_packages {
+    local func="${FUNCNAME[0]}()"
+
+    if [ -z $1 ]; then
+	logError "$func Missing src_dir"
+	return 1
+    fi
+    if [ -z $2 ]; then
+	logError "$func Missing dest_dir"
+	return 1
+    fi
+    local src_dir=$1
+    local dest_dir=$2
+
+    local src_dir="http://$MASTER/$src_dir"
+    mkdir -p $dest_dir
+    pushd $dest_dir
+    local mf=manifest.txt
+    if [ -e $mf ]; then
+	rm -f $mf
+    fi
+    logInfo "$func Getting $src_dir/$mf"
+    wget --quiet $src_dir/$mf
+ 
+    parse_manifest $mf
+    ##what do we need to get....
+    local p
+    for p in ${wget_list[@]} 
+    do
+	if [ -e $p ]
+	then   # remove the file prior to retrieving it,
+	    rm -f $p         # wget will not replace the file, it will add a second
+	fi                   # one with a new name.
+	logInfo "$func Getting $src_dir/$p"
+	wget --quiet $src_dir/$p
+	#ls -ald $PWD/$p	
+    done
+}
+
+
+array_contains () { 
+    local SOPTS=$-; set +x;
+    local array="$1[@]"
+    local seeking=$2
+    local in=1
+    for element in "${!array}"; do
+        if [[ $element == $seeking ]]; then
+            in=0
+            break
+        fi
+    done
+    set -$SOPTS
+    return $in
+}
+
+# read in a script list and return the values in the arrays indicated.
+# will scan the directory, fill out the list and
+# remove the blacklisted items...
+#
+function get_local_script_list {
+  postdir=$1;
+  if [[ ${#XCAT_PS_LOCAL[@]} == 0 ]]; then
+    for s in $(find $postdir -maxdepth 1 -type f -executable | sort); do
+       XCAT_PS_LOCAL+=(`basename $s`)
+     done
+  fi
+  nl=();
+  for s in ${XCAT_PS_LOCAL[@]}; do
+    if ! array_contains XCAT_PS_LOCAL_BL $s; then 
+      nl+=($s);            
+    else
+      echo "$(basename ${BASH_SOURCE[1]}) blacklisted $s"
+    fi
+  done
+  XCAT_PS_LOCAL=(${nl[@]})
+}
+function get_common_script_list {
+  postdir=$1;
+  #white list and black lists
+  if [[ ${#XCAT_PS_COMMON[@]} == 0 ]]; then
+    for s in $(find $postdir -maxdepth 1 -type f -executable | sort); do
+       XCAT_PS_COMMON+=(`basename $s`)
+     done
+  fi
+  nl=();
+  for s in ${XCAT_PS_COMMON[@]}; do
+    if ! array_contains XCAT_PS_COMMON_BL $s; then 
+      nl+=($s);            
+    else
+      echo "$(basename ${BASH_SOURCE[1]}) blacklisted $s"
+    fi
+  done
+  XCAT_PS_COMMON=(${nl[@]})
+}
+
+function run_postscripts {
+    local postscripts="$1[@]"
+    local postdir=$2;
+    rvalue=0;
+    for n in "${!postscripts}"; do
+      s=$postdir/$n
+      echo "`date` Running postscript: $s" 
+      rc=0
+      $s $installroot $osver $arch $profile $workdir || rc=$?; 
+      echo "postscript $s  return with $rc";
+      [[ $rc != 0 ]] && rvalue=$rc;
+    done
+    return $rvalue;
+
+}
+
+
+

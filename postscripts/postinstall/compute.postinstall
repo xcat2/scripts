@@ -1,0 +1,37 @@
+#!/bin/sh
+#-- this script is run after all packages from $profile.pkglist are installed
+#-- 
+#-- it gets these arguments:
+#-- 
+#-- $1 = install root (chroot directory for profile)
+#-- $2 = OS version
+#-- $3 = architecture
+#-- $4 = profile name
+#-- $5 = work dir (where genimage is located)
+#-- 
+#-- 
+
+#set -e
+
+thisdir=`dirname $0`
+thisscript=`basename $0`
+
+source $thisdir/functions $*
+
+unset ARCH
+unset XCAT_IN_CHROOT;
+
+
+return_value=0
+
+# RB: Custom post install gorp.
+# return the last error found, or, zero if all cleared.
+for s in $(find $thisdir/postinstall.d -type f -executable -maxdepth 1 | sort); do
+  echo "`date` Running postscript: $s" 
+  rc=0
+  $s $installroot $osver $arch $profile $workdir || rc=$?; 
+  echo "postscript $s  return with $rc";
+  [[ $rc != 0 ]] && return_value=$rc;
+done
+exit $return_value;
+
