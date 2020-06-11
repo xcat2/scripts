@@ -123,12 +123,21 @@ all_mds=$(printf '%s\n%s' "$disk1_mds" "$disk2_mds" | sort -u)
 
 for md in $all_mds; do
     echo "[$0] stopping md device: /dev/md/${md}"
-    mdadm --stop /dev/md/${md}
+    test -b /dev/md/${md} && mdadm --stop /dev/md/${md}
+    sleep 5
+    echo "[$0] stopping md device: /dev/md${md}"
+    test -b /dev/md${md} && mdadm --stop /dev/md${md}
+    sleep 5
 done
 echo "[$0] zeroing superblocks of ${disk1}-part*"
 mdadm --zero-superblock ${disk1}-part*
 echo "[$0] zeroing superblocks of ${disk2}-part*"
 mdadm --zero-superblock ${disk2}-part*
+
+echo "[$0] zeroing GPT and MBR on ${disk1}"
+sgdisk -Z /dev/${disk1}
+echo "[$0] zeroing GPT and MBR on ${disk2}"
+sgdisk -Z /dev/${disk2}
 
 ########################################################################
 # Part 2: create the partition scheme file /tmp/partitionfile
